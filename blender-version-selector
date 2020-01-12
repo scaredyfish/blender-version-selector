@@ -1,0 +1,140 @@
+#!/usr/bin/env python3
+
+# ***** BEGIN GPL LICENSE BLOCK *****
+#
+# This program is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License
+# as published by the Free Software Foundation; either version 2
+# of the License, or (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful, 
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software Foundation,
+# Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02110-1301, USA.
+#
+# ***** END GPL LICENCE BLOCK *****
+
+######################################################
+# Importing modules
+######################################################
+
+import os
+import sys
+import struct
+import gzip
+import tempfile
+import subprocess
+
+import logging
+log = logging.getLogger("BlendFileReader")
+logging.basicConfig(level=logging.DEBUG)
+
+
+######################################################
+# module global routines
+######################################################
+
+def ReadString(handle, length):
+    '''
+    ReadString reads a String of given length or a zero terminating String
+    from a file handle
+    '''
+    if length != 0:
+        return handle.read(length).decode()
+    else:
+        # length == 0 means we want a zero terminating string
+        result = ""
+        s = ReadString(handle, 1)
+        while s!="\0":
+            result += s
+            s = ReadString(handle, 1)
+        return result
+
+def openBlendFile(filename):
+    '''
+    Open a filename, determine if the file is compressed and returns a handle
+    '''
+    handle = open(filename, 'rb')
+    magic = ReadString(handle, 7)
+
+    log.debug(magic)
+    if magic in ("BLENDER", "BULLETf"):
+        log.debug("normal blendfile detected")
+        handle.seek(0, os.SEEK_SET)
+        return handle
+    else:
+        log.debug("gzip blendfile detected?")
+        handle.close()
+        log.debug("decompressing started")
+        fs = gzip.open(filename, "rb")
+        handle = tempfile.TemporaryFile()
+        data = fs.read(1024*1024) 
+        while data: 
+            handle.write(data) 
+            data = fs.read(1024*1024) 
+        log.debug("decompressing finished")
+        fs.close()
+        log.debug("resetting decompressed file")
+        handle.seek(0, os.SEEK_SET)
+        return handle
+
+
+######################################################
+# module classes
+######################################################
+
+class BlendFileHeader:
+    '''
+    BlendFileHeader allocates the first 12 bytes of a blend file.
+    It contains information about the hardware architecture.
+    Header example: BLENDER_v254
+    
+    BlendFileHeader.Magic             (str)
+    BlendFileHeader.PointerSize       (int)
+    BlendFileHeader.LittleEndianness  (bool)
+    BlendFileHeader.StructPre         (str)   see http://docs.python.org/py3k/library/struct.html#byte-order-size-and-alignment
+    BlendFileHeader.Version           (int)
+    '''
+    
+    def __init__(self, handle):
+        log.debug("reading blend-file-header")
+        
+        self.Magic = ReadString(handle, 7)
+        log.debug(self.Magic)
+        
+        pointersize = ReadString(handle, 1)
+        log.debug(pointersize)
+        if pointersize == "-":
+            self.PointerSize = 8
+        if pointersize == "_":
+            self.PointerSize = 4
+                    
+        endianness = ReadString(handle, 1)
+        log.debug(endianness)
+        if endianness == "v":
+            self.LittleEndianness = True
+            self.StructPre = "<"
+        if endianness == "V":
+            self.LittleEndianness = False
+            self.StructPre = ">"
+        
+        version = ReadString(handle, 3)
+        log.debug(version)
+        self.Version = int(version)
+        
+        log.debug("{0} {1} {2} {3}".format(self.Magic, self.PointerSize, self.LittleEndianness, version))
+
+versions = os.listdir(sys.argv[1])
+versions = [x for x in versions if os.path.isdir(f'{sys.argv[1]}{x}')]
+
+if (len(sys.argv) > 2):
+    handle = openBlendFile(sys.argv[2])
+    header = BlendFileHeader(handle)
+
+    subprocess.Popen([f'{sys.argv[1]}{header.Version}/blender', sys.argv[2]])
+else:
+    subprocess.Popen([f'{sys.argv[1]}{versions[-1]}/blender'])
